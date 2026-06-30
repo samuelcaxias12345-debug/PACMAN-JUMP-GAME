@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>PacMem Obstáculos</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+  {
+    "imports": {}
+  }
+  </script>
+</head>
+<body>
+  <canvas id="game" width="960" height="600"></canvas>
+
+  <div id="ui">
+    <div id="score">0</div>
+    <button id="pauseBtn" aria-label="Pausar">Pausar</button>
+    <input id="codeInput" placeholder="Digite código para zerar" autocomplete="off"/>
+  </div>
+
+  <div id="watermark">creditos:samuel</div>
+
+  <script type="module" src="game.js"></script>
+</body>
+</html>

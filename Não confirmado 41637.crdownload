@@ -1,0 +1,330 @@
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+let W = canvas.width;
+let H = canvas.height;
+
+// scale for high-dpi
+function resizeCanvas(){
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.round(rect.width * ratio);
+  canvas.height = Math.round(rect.height * ratio);
+  canvas.style.width = rect.width + "px";
+  canvas.style.height = rect.height + "px";
+  ctx.setTransform(ratio,0,0,ratio,0,0);
+  W = rect.width;
+  H = rect.height;
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// Game state
+let running = true;
+let paused = false;
+let score = 0;
+let spawnTimer = 0;
+let spawnInterval = 900; // ms
+let lastTime = performance.now();
+let speedMultiplier = 1;
+let obstacles = [];
+let explosion = null;
+let gameWon = false;
+
+// Player (PacMem) - runs on ground and can jump over obstacles
+const player = {
+  x: Math.max(64, W * 0.18), // fixed horizontal position (runs in place)
+  y: H*0.82,
+  radius: Math.min(36, W*0.05),
+  color: '#ffd94a',
+  vy: 0,
+  onGround: true
+};
+
+// Controls
+const pauseBtn = document.getElementById('pauseBtn');
+const scoreEl = document.getElementById('score');
+const codeInput = document.getElementById('codeInput');
+
+pauseBtn.addEventListener('click',()=>{ paused = !paused; pauseBtn.textContent = paused ? 'Continuar' : 'Pausar'; });
+codeInput.addEventListener('keydown',(e)=>{
+  if(e.key === 'Enter'){
+    const v = codeInput.value.trim().toLowerCase();
+    if(v === 'samuelpawer') {
+      triggerReset();
+    } else if(v === 'samuel123') {
+      // mark game as won and stop gameplay
+      gameWon = true;
+      running = false;
+      paused = false;
+      // optional explosion on win
+      startExplosion(player.x, player.y);
+    }
+    codeInput.value = '';
+  }
+});
+
+// Keyboard - space jumps
+window.addEventListener('keydown',(e)=>{
+  if(e.key === ' ') {
+    if(player.onGround && !paused && running){
+      // slightly smaller jump
+      player.vy = -520;
+      player.onGround = false;
+    }
+    e.preventDefault();
+  }
+});
+
+ // Touch: tap to jump
+canvas.addEventListener('touchstart', (e)=>{
+  const t = e.changedTouches[0];
+  // treat quick tap as jump
+  if(player.onGround && !paused && running){
+    // match keyboard jump (slightly smaller)
+    player.vy = -520;
+    player.onGround = false;
+  }
+  e.preventDefault();
+});
+
+ // Obstacles spawn on the right and move left toward the player; drawn as blocks positioned on the ground with equal spacing
+function spawnObstacle(){
+  const width = Math.max(24, Math.round(player.radius * 1.1));
+  const height = Math.max(16, Math.round(player.radius * 0.6));
+  const x = W + width/2; // start just off-screen to the right
+  const y = GROUND_Y() - height/2; // base apoiada no chão
+  const baseSpeed = 320;
+  obstacles.push({
+    x, y, width, height,
+    vx: -(baseSpeed * speedMultiplier),
+    passed: false,
+    color: '#e74c3c'
+  });
+}
+
+// Explosion animation
+function startExplosion(x,y){
+  explosion = {x,y,t:0,parts:[]};
+  for(let i=0;i<28;i++){
+    const a = Math.random()*Math.PI*2;
+    explosion.parts.push({
+      x,y,vx: Math.cos(a)* (Math.random()*260+60),
+      vy: Math.sin(a)* (Math.random()*260+60),
+      r: Math.random()*6+4,
+      life: 1 + Math.random()*0.8
+    });
+  }
+}
+
+// Reset game (when score reaches 1000 or code)
+function triggerReset(){
+  // explosion centered on player
+  startExplosion(player.x, player.y);
+  // brief pause and then reset variables
+  running = false;
+  setTimeout(()=>{
+    obstacles = [];
+    score = 0;
+    speedMultiplier = 1;
+    spawnInterval = 900;
+    // reset player
+    player.x = Math.max(64, W * 0.18);
+    player.y = H*0.82;
+    player.vy = 0;
+    player.onGround = true;
+    running = true;
+  }, 800);
+}
+
+// Game physics constants
+const GRAVITY = 1100; // px/s^2
+const GROUND_Y = () => H*0.82; // ground vertical position for player
+
+// Game loop
+function update(dt){
+  if(paused || !running) return;
+
+  // player stays at fixed x and runs on ground: add small bob for running feel
+  if(player.onGround){
+    // subtle running bounce
+    player.y = GROUND_Y() + Math.sin(performance.now()*0.01)*0.6;
+  }
+
+  // apply gravity / vertical movement for jumps
+  player.vy += GRAVITY * dt;
+  player.y += player.vy * dt;
+  const ground = GROUND_Y();
+  if(player.y >= ground){
+    player.y = ground;
+    player.vy = 0;
+    player.onGround = true;
+  }
+
+  // spawn handling: ensure a consistent horizontal gap between obstacles
+  // if there are no obstacles, spawn one immediately; otherwise spawn when the last obstacle
+  // has moved left enough to create the desired gap
+  const gap = Math.max(300, 380 - Math.floor(speedMultiplier * 20)); // increased base gap so obstacles are farther apart
+  if(obstacles.length === 0){
+    spawnObstacle();
+  } else {
+    const last = obstacles[obstacles.length - 1];
+    if(last.x < W - gap){
+      spawnObstacle();
+    }
+  }
+
+  // update obstacles (move left)
+  for(let i=obstacles.length-1;i>=0;i--){
+    const o = obstacles[i];
+    o.x += o.vx * dt;
+
+    // approximate collision: check circle (player) vs spike rectangle
+    const dx = Math.abs(o.x - player.x);
+    const dy = Math.abs(o.y - player.y);
+    const hitX = dx < (o.width/2 + player.radius*0.8);
+    const hitY = dy < (o.height/2 + player.radius*0.6);
+    if(hitX && hitY){
+      // hit -> game over -> reset with explosion
+      triggerReset();
+      return;
+    }
+
+    // passed beyond left without hitting
+    if(o.x + o.width/2 < 0){
+      if(!o.passed){
+        o.passed = true;
+        score += 10;
+        scoreEl.textContent = score;
+        // increase speed gradually
+        if(score % 50 === 0){
+          speedMultiplier += 0.08;
+          spawnInterval = Math.max(280, spawnInterval - 40);
+        }
+        // if score reaches 1000 -> reset
+        if(score >= 1000){
+          triggerReset();
+          return;
+        }
+      }
+      obstacles.splice(i,1);
+    }
+  }
+}
+
+// explosion update
+function updateExplosion(dt){
+  if(!explosion) return;
+  explosion.t += dt;
+  for(const p of explosion.parts){
+    p.vy += 400 * dt; // gravity
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+  }
+  // clear finished
+  if(explosion.parts.every(p=>p.life<=0)){
+    explosion = null;
+  }
+}
+
+// draw
+function draw(){
+  // clear
+  ctx.clearRect(0,0,W,H);
+
+  // background subtle grid
+  ctx.fillStyle = '#021417';
+  ctx.fillRect(0,0,W,H);
+
+  // ground line
+  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  ctx.fillRect(0, GROUND_Y() + player.radius + 8, W, 2);
+
+  // draw obstacles as simple blocks (sem espinhos)
+  for(const o of obstacles){
+    ctx.save();
+    ctx.translate(o.x, o.y);
+    // main block
+    ctx.fillStyle = o.color;
+    ctx.beginPath();
+    ctx.rect(-o.width/2, -o.height/2, o.width, o.height);
+    ctx.fill();
+
+    // soft top highlight to add depth
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(-o.width/2 + 3, -o.height/2 + 2, o.width - 6, Math.max(4, o.height * 0.18));
+
+    ctx.restore();
+  }
+
+  // draw player (PacMem) - simple pacman with mouth animation, affected by vertical position
+  // fixed mouth (no animation)
+  const mouth = 0.18;
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.fillStyle = player.color;
+  ctx.beginPath();
+  ctx.moveTo(0,0);
+  // fixed arc endpoints for a static mouth
+  ctx.arc(0,0,player.radius, mouth * Math.PI, (2 - mouth) * Math.PI, false);
+  ctx.closePath();
+  ctx.fill();
+
+  // eye (positioned to the right so PacMem looks straight)
+  ctx.fillStyle = '#2b2b2b';
+  ctx.beginPath();
+  ctx.arc(player.radius * 0.16, -player.radius * 0.36, Math.max(2, player.radius * 0.14), 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+
+  // draw explosion if any
+  if(explosion){
+    for(const p of explosion.parts){
+      const alpha = Math.max(0, p.life);
+      ctx.fillStyle = `rgba(255,140,0,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r,0,Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  // game-won overlay
+  if(gameWon){
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = 'white';
+    ctx.font = '36px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('VOCÊ ZEROU O JOGO', W/2, H/2 - 10);
+    ctx.font = '16px system-ui';
+    ctx.fillText('Pressione F5 para jogar novamente', W/2, H/2 + 30);
+    return; // freeze drawing beneath the overlay
+  }
+
+  // paused overlay
+  if(paused){
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = 'white';
+    ctx.font = '24px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('Pausado', W/2, H/2);
+  }
+}
+
+// main loop
+function loop(now){
+  const dt = Math.min(0.05, (now - lastTime)/1000);
+  lastTime = now;
+  update(dt);
+  updateExplosion(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+
+// ensure initial score shown
+scoreEl.textContent = score;
